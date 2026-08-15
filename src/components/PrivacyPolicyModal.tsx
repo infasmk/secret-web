@@ -2,8 +2,8 @@
  * Honest Privacy & Data Retention Disclosure Modal
  */
 
-import React from 'react';
-import { Shield, Lock, Trash2, AlertTriangle, Eye, Server, RefreshCw } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { Shield, Lock, Trash2, Server, Key, Eye, X, ShieldCheck } from 'lucide-react';
 
 interface PrivacyPolicyModalProps {
   isOpen: boolean;
@@ -11,94 +11,103 @@ interface PrivacyPolicyModalProps {
 }
 
 export const PrivacyPolicyModal: React.FC<PrivacyPolicyModalProps> = ({ isOpen, onClose }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = 'unset';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-8 text-neutral-100 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fade-in"
+    >
+      <div className="relative w-full max-w-2xl bg-[#0c0e14] border border-white/10 rounded-2xl p-5 sm:p-8 text-slate-100 shadow-2xl space-y-6 my-auto max-h-[90dvh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <Shield className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Privacy Architecture & Data Retention</h2>
-              <p className="text-xs text-neutral-400">Transparent Cryptographic Guarantees & Operational Boundaries</p>
+              <h2 className="text-base sm:text-lg font-semibold text-white">Privacy Architecture & Data Lifecycle</h2>
+              <p className="text-xs text-slate-400">Cryptographic Guarantees & Zero-Knowledge Verification</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-neutral-400 hover:text-white p-2 rounded-lg hover:bg-neutral-800 transition text-sm"
+            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-white/5 transition cursor-pointer"
+            aria-label="Close"
           >
-            ✕
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Core Principles */}
-        <div className="space-y-4 text-sm text-neutral-300">
-          <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+        <div className="space-y-4 text-xs sm:text-sm text-slate-300">
+          <section className="p-4 bg-[#141722] border border-white/5 rounded-xl space-y-1.5">
+            <h3 className="text-xs sm:text-sm font-semibold text-white flex items-center gap-2">
               <Lock className="w-4 h-4 text-emerald-400" />
               1. End-to-End Client Encryption (Web Crypto API)
             </h3>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              Every message and uploaded media item is encrypted in your web browser with <strong>AES-GCM (256-bit)</strong> before it leaves your device. 
-              The raw cryptographic encryption key is appended solely to the URL hash fragment (<code>#key=...</code>). By Web specifications (RFC 3986), 
-              the hash fragment is never included in HTTP requests and is never received by the web server or logged.
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Every message and attachment is encrypted in your web browser with <strong>AES-GCM (256-bit)</strong> prior to transmission. 
+              The raw cryptographic encryption key is appended solely to the URL hash fragment (<code className="text-emerald-400 font-mono">#key=...</code>). By Web RFC 3986 standards, 
+              hash fragments are never sent in HTTP requests and are never received or stored by the backend.
             </p>
           </section>
 
-          <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <section className="p-4 bg-[#141722] border border-white/5 rounded-xl space-y-1.5">
+            <h3 className="text-xs sm:text-sm font-semibold text-white flex items-center gap-2">
               <Server className="w-4 h-4 text-emerald-400" />
-              2. Zero-Account & Zero Personal Identifiers
+              2. Zero Account & Zero Identity Tracking
             </h3>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              We do not require an email address, phone number, real name, or password. Temporary sessions use randomized, anonymous identity handles 
-              (e.g., <em>Neon Raven</em>). IP addresses are briefly analyzed in memory purely for denial-of-service and brute-force PIN prevention, and are never saved to long-term storage or linked to chat content.
+            <p className="text-xs text-slate-400 leading-relaxed">
+              No email address, phone number, real name, or account registration is ever required. Sessions utilize randomized ephemeral pseudonyms. IP addresses are analyzed exclusively in memory for rate-limiting and DDoS mitigation, and are never persisted to long-term storage.
             </p>
           </section>
 
-          <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <section className="p-4 bg-[#141722] border border-white/5 rounded-xl space-y-1.5">
+            <h3 className="text-xs sm:text-sm font-semibold text-white flex items-center gap-2">
               <Trash2 className="w-4 h-4 text-emerald-400" />
-              3. Automatic Expiration & Permanent Deletion
+              3. Automatic Memory Sweeping & Kill Switch
             </h3>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              Every room has a strict expiration timer (1h, 6h, 24h, 3d, 7d). A server-side background sweeper continuously flushes and wipes expired rooms and all associated temporary files. 
-              Alternatively, any participant can invoke the <strong>"Destroy Room"</strong> button to immediately wipe all messages, media files, and active real-time connections.
+            <p className="text-xs text-slate-400 leading-relaxed">
+              When a room reaches its scheduled expiration timer (15m to 7d) or any participant activates the emergency <strong>Destroy Room</strong> kill switch, all encrypted ciphertext chunks, file memory, and metadata are permanently erased.
             </p>
           </section>
 
-          <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <section className="p-4 bg-[#141722] border border-white/5 rounded-xl space-y-1.5">
+            <h3 className="text-xs sm:text-sm font-semibold text-white flex items-center gap-2">
               <Eye className="w-4 h-4 text-emerald-400" />
-              4. Disappearing & View-Once Media
+              4. Ephemeral View-Once Attachments
             </h3>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              When view-once media is enabled, the encrypted file is decrypted in the recipient's memory only once. Closing or finishing the view triggers an immediate burn command that deletes the file from storage and purges the payload from the room feed.
-            </p>
-          </section>
-
-          <section className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5 text-xs text-amber-200">
-            <div className="flex items-center gap-1.5 font-semibold text-amber-300">
-              <AlertTriangle className="w-4 h-4" />
-              Important Technical Honesty & Screenshot Notice
-            </div>
-            <p className="leading-relaxed">
-              No digital messaging software or web application can mathematically prevent a recipient from photographing their monitor with a secondary physical camera, taking an operating-system level screenshot, or recording their screen. Always share sensitive information with people you trust.
+            <p className="text-xs text-slate-400 leading-relaxed">
+              When view-once media is opened by a recipient, a cryptographically signed burn signal broadcasts across the room websocket, automatically purging the file from memory across all devices.
             </p>
           </section>
         </div>
 
-        {/* Footer */}
-        <div className="pt-2 flex justify-end">
+        <div className="flex justify-end pt-2">
           <button
             onClick={onClose}
-            className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-medium text-sm rounded-xl transition"
+            className="px-5 py-2.5 bg-white/5 hover:bg-white/10 text-white text-xs font-semibold rounded-xl border border-white/10 transition cursor-pointer"
           >
-            I Understand
+            Understood
           </button>
         </div>
       </div>

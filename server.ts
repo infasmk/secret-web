@@ -165,13 +165,14 @@ app.post('/api/rooms/create', (req, res) => {
 
 // Get Room Metadata (public info only, no keys/plaintext)
 app.get('/api/rooms/:id', (req, res) => {
-  let room = rooms.get(req.params.id);
+  const roomId = req.params.id;
+  let room = rooms.get(roomId);
   const now = Date.now();
 
   if (!room) {
-    // Dynamically register active room session in memory
+    // Register active room session in memory
     room = {
-      id: req.params.id,
+      id: roomId,
       title: 'Private Session',
       createdAt: now,
       expiresAt: now + 86400000,
@@ -190,7 +191,7 @@ app.get('/api/rooms/:id', (req, res) => {
       messages: [],
       fileIds: new Set(),
     };
-    rooms.set(req.params.id, room);
+    rooms.set(roomId, room);
   }
 
   if (room.status === 'destroyed' || now >= room.expiresAt) {
@@ -206,6 +207,7 @@ app.get('/api/rooms/:id', (req, res) => {
     title: room.title,
     createdAt: room.createdAt,
     expiresAt: room.expiresAt,
+    creatorId: room.creatorId,
     status: room.status,
     security: {
       hasPin: room.security.hasPin,
@@ -221,40 +223,36 @@ app.get('/api/rooms/:id', (req, res) => {
 
 // Verify PIN Attempt
 app.post('/api/rooms/:id/verify-pin', (req, res) => {
-  const room = rooms.get(req.params.id);
-  if (!room || room.status !== 'active') {
-    return res.status(404).json({ error: 'Room not found' });
-  }
-
-  if (!room.security.hasPin) {
-    return res.json({ verified: true });
-  }
+  const roomId = req.params.id;
+  const room = rooms.get(roomId);
+  const { pinHash } = req.body;
 
   const ip = getClientIp(req);
-  const lockKey = `${ip}:${room.id}`;
+  const lockKey = `${ip}:${roomId}`;
   const now = Date.now();
   const attemptData = pinAttempts.get(lockKey) || { count: 0, lockedUntil: 0 };
 
   if (attemptData.lockedUntil > now) {
     const remainingSec = Math.ceil((attemptData.lockedUntil - now) / 1000);
     return res.status(429).json({
-      error: `Too many failed PIN attempts. Locked for ${remainingSec}s`,
+      error: `Too many failed attempts. Locked for ${remainingSec}s`,
       lockedUntil: attemptData.lockedUntil,
     });
   }
 
-  const { pinHash } = req.body;
-  if (!pinHash || pinHash !== room.security.pinHash) {
-    attemptData.count += 1;
-    if (attemptData.count >= 5) {
-      attemptData.lockedUntil = now + 60000; // 1 minute lockout
-      attemptData.count = 0;
+  if (room && room.security.hasPin && room.security.pinHash) {
+    if (!pinHash || pinHash !== room.security.pinHash) {
+      attemptData.count += 1;
+      if (attemptData.count >= 5) {
+        attemptData.lockedUntil = now + 60000; // 1 minute lockout
+        attemptData.count = 0;
+      }
+      pinAttempts.set(lockKey, attemptData);
+      return res.status(401).json({
+        error: 'Incorrect room password / PIN',
+        attemptsRemaining: Math.max(0, 5 - attemptData.count),
+      });
     }
-    pinAttempts.set(lockKey, attemptData);
-    return res.status(401).json({
-      error: 'Incorrect PIN code',
-      attemptsRemaining: Math.max(0, 5 - attemptData.count),
-    });
   }
 
   // Reset attempt counter on success

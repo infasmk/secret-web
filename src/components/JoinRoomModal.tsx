@@ -1,9 +1,9 @@
 /**
- * Sleek Interface Join Room Modal with PIN Prompt and URL Parser
+ * Sleek Interface Join Room Modal with PIN/Password Prompt and URL Parser
  */
 
-import React, { useState } from 'react';
-import { LogIn, Key, Lock, AlertCircle, ArrowRight, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LogIn, Key, Lock, AlertCircle, ArrowRight, X, Eye, EyeOff } from 'lucide-react';
 import { hashPin } from '../lib/crypto';
 import { parseResponseJson, safeFetch } from '../lib/api';
 import { db } from '../lib/firebase';
@@ -22,10 +22,32 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [pin, setPin] = useState('');
+  const [showPin, setShowPin] = useState(false);
   const [needsPin, setNeedsPin] = useState(false);
+  const [targetRoomId, setTargetRoomId] = useState('');
+  const [extractedKey, setExtractedKey] = useState<string | undefined>(undefined);
   const [pinSalt, setPinSalt] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Close on Escape key & lock body scroll
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isVerifying) {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = 'unset';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, isVerifying, onClose]);
 
   if (!isOpen) return null;
 
@@ -33,34 +55,45 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    const raw = inputVal.trim();
-    if (!raw) {
-      setError('Please enter a room code or link');
-      return;
-    }
+    let roomId = targetRoomId;
+    let key = extractedKey;
 
-    let roomId = '';
-    let extractedKey = '';
-
-    // Handle full URL or room ID + hash
-    if (raw.includes('/room/')) {
-      const parts = raw.split('/room/')[1];
-      const [idPart, hashPart] = parts.split('#');
-      roomId = idPart.split('?')[0].trim();
-      if (hashPart && hashPart.includes('key=')) {
-        extractedKey = hashPart.split('key=')[1]?.split('&')[0];
+    if (!needsPin) {
+      const raw = inputVal.trim();
+      if (!raw) {
+        setError('Please enter a room code or link');
+        return;
       }
-    } else if (raw.includes('#key=')) {
-      const [idPart, keyPart] = raw.split('#key=');
-      roomId = idPart.trim();
-      extractedKey = keyPart.split('&')[0].trim();
-    } else {
-      roomId = raw.trim();
-    }
 
-    if (!roomId) {
-      setError('Invalid room link or format');
-      return;
+      // Handle full URL or room ID + hash
+      if (raw.includes('/room/')) {
+        const parts = raw.split('/room/')[1];
+        const [idPart, hashPart] = parts.split('#');
+        roomId = idPart.split('?')[0].trim();
+        if (hashPart && hashPart.includes('key=')) {
+          key = hashPart.split('key=')[1]?.split('&')[0];
+        }
+      } else if (raw.includes('#key=')) {
+        const [idPart, keyPart] = raw.split('#key=');
+        roomId = idPart.replace(/^.*\?room=/, '').trim();
+        key = keyPart.split('&')[0].trim();
+      } else if (raw.includes('?room=') || raw.includes('&room=')) {
+        const urlParams = new URLSearchParams(raw.split('?')[1] || '');
+        roomId = urlParams.get('room') || '';
+        if (raw.includes('#key=')) {
+          key = raw.split('#key=')[1]?.split('&')[0]?.trim();
+        }
+      } else {
+        roomId = raw.trim();
+      }
+
+      if (!roomId) {
+        setError('Invalid room link or format');
+        return;
+      }
+
+      setTargetRoomId(roomId);
+      setExtractedKey(key);
     }
 
     setIsVerifying(true);
@@ -111,15 +144,15 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
       let calculatedPinHash = '';
       if (meta.security?.hasPin) {
         if (!pin.trim()) {
-          setError('PIN code required for this room');
+          setError('Password / PIN code required for this room');
           setIsVerifying(false);
           return;
         }
         calculatedPinHash = await hashPin(pin.trim(), meta.security.pinSalt || '');
-        
-        // Verify PIN locally or on server
+
+        // Verify with server endpoint or stored hash
         if (meta.security.pinHash && calculatedPinHash !== meta.security.pinHash) {
-          throw new Error('Incorrect PIN code');
+          throw new Error('Incorrect room password or PIN');
         }
 
         try {
@@ -128,37 +161,48 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinHash: calculatedPinHash }),
           });
-          if (pinRes.ok) {
-            await parseResponseJson<any>(pinRes);
+          if (pinRes.status === 401 || pinRes.status === 429) {
+            const errData = await parseResponseJson<{ error?: string }>(pinRes);
+            throw new Error(errData.error || 'Incorrect PIN code');
           }
-        } catch (_) {}
+        } catch (srvErr: any) {
+          if (srvErr.message?.includes('Incorrect') || srvErr.message?.includes('Locked')) {
+            throw srvErr;
+          }
+        }
       }
 
-      onJoinRoom(roomId, extractedKey || undefined, calculatedPinHash || undefined);
+      onJoinRoom(roomId, key || undefined, calculatedPinHash || undefined);
     } catch (err: any) {
-      setError(err.message || 'Failed to join room');
+      setError(err.message || 'Failed to access room');
     } finally {
       setIsVerifying(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-6 sm:p-7 text-slate-100 shadow-2xl space-y-5">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isVerifying) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fade-in"
+    >
+      <div className="relative w-full max-w-md bg-[#0c0e14] border border-white/10 rounded-2xl p-5 sm:p-7 text-slate-100 shadow-2xl space-y-5 my-auto max-h-[92dvh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/5 pb-4">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-center text-indigo-400">
               <LogIn className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Join Private Room</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white tracking-tight">Join Private Room</h2>
               <p className="text-xs text-slate-400">Enter a room code or shared private link</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition"
+            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-white/5 transition cursor-pointer"
+            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -182,26 +226,35 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
                 type="text"
                 value={inputVal}
                 onChange={e => setInputVal(e.target.value)}
-                placeholder="Paste link or room code (e.g. xyz-abc-123)"
+                placeholder="e.g. ghost-raven-492 or paste full link"
                 autoFocus
-                className="w-full px-3.5 py-2.5 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono transition"
+                className="w-full px-3.5 py-2.5 bg-[#141722] border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono transition"
               />
             </div>
           ) : (
-            <div className="space-y-3 p-4 bg-black/50 border border-white/10 rounded-xl animate-fade-in">
-              <div className="flex items-center gap-2 text-indigo-400 text-xs font-medium">
-                <Lock className="w-4 h-4" />
-                This room is protected by a PIN
+            <div className="space-y-3 p-4 bg-[#141722] border border-white/10 rounded-xl animate-fade-in">
+              <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium">
+                <Lock className="w-4 h-4 text-indigo-400" />
+                <span>Password Required for Room: <strong className="text-white font-mono">{targetRoomId}</strong></span>
               </div>
-              <input
-                type="password"
-                value={pin}
-                onChange={e => setPin(e.target.value)}
-                placeholder="Enter room PIN"
-                autoFocus
-                maxLength={16}
-                className="w-full px-3.5 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-              />
+              <div className="relative flex items-center">
+                <input
+                  type={showPin ? 'text' : 'password'}
+                  value={pin}
+                  onChange={e => setPin(e.target.value)}
+                  placeholder="Enter room password or PIN"
+                  autoFocus
+                  maxLength={32}
+                  className="w-full px-3.5 py-2.5 pr-10 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPin(!showPin)}
+                  className="absolute right-3 text-slate-400 hover:text-slate-200 p-1 cursor-pointer"
+                >
+                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
           )}
 
@@ -209,7 +262,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 text-xs font-medium text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
+              className="px-4 py-2.5 text-xs font-medium text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition cursor-pointer"
             >
               Cancel
             </button>
@@ -221,11 +274,11 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
               {isVerifying ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Connecting...
+                  Authenticating...
                 </>
               ) : (
                 <>
-                  <span>{needsPin ? 'Verify & Enter' : 'Continue'}</span>
+                  <span>{needsPin ? 'Unlock & Enter' : 'Continue'}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </>
               )}

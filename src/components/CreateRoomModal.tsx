@@ -2,28 +2,28 @@
  * Sleek Interface Create Room Modal with Expiration Presets, Security Settings, and Zero-Knowledge Key Generation
  */
 
-import React, { useState } from 'react';
-import { Shield, Clock, Lock, FileUp, Eye, Sparkles, AlertCircle, ArrowRight, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Shield, Clock, Lock, FileUp, Eye, EyeOff, Sparkles, AlertCircle, ArrowRight, X, KeyRound } from 'lucide-react';
 import { generateRoomKey, exportKeyToBase64, hashPin, generateSalt } from '../lib/crypto';
 import { generateSecureRoomId } from '../lib/anonymousNames';
 import { parseResponseJson, safeFetch } from '../lib/api';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { ExpirationOption } from '../types';
 
 interface CreateRoomModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onRoomCreated: (roomId: string, rawKeyBase64: string, hasPin: boolean, expiresAt: number) => void;
+  onRoomCreated: (roomId: string, rawKeyBase64: string, hasPin: boolean, expiresAt: number, pinHash?: string) => void;
 }
 
 const EXPIRATION_OPTIONS: { label: string; value: ExpirationOption; ms: number; desc: string }[] = [
-  { label: '15 Minutes', value: '15m', ms: 15 * 60 * 1000, desc: 'Ephemeral fleeting chat' },
+  { label: '15 Minutes', value: '15m', ms: 15 * 60 * 1000, desc: 'Ephemeral chat' },
   { label: '1 Hour', value: '1h', ms: 60 * 60 * 1000, desc: 'Short session' },
-  { label: '6 Hours', value: '6h', ms: 6 * 60 * 60 * 1000, desc: 'Collaboration sync' },
+  { label: '6 Hours', value: '6h', ms: 6 * 60 * 60 * 1000, desc: 'Work sync' },
   { label: '24 Hours', value: '24h', ms: 24 * 60 * 60 * 1000, desc: 'Standard default' },
-  { label: '3 Days', value: '3d', ms: 3 * 24 * 60 * 60 * 1000, desc: 'Multi-day session' },
-  { label: '7 Days', value: '7d', ms: 7 * 24 * 60 * 60 * 1000, desc: 'Max room lifespan' },
+  { label: '3 Days', value: '3d', ms: 3 * 24 * 60 * 60 * 1000, desc: 'Multi-day project' },
+  { label: '7 Days', value: '7d', ms: 7 * 24 * 60 * 60 * 1000, desc: 'Maximum lifespan' },
 ];
 
 export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
@@ -35,10 +35,30 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
   const [selectedExp, setSelectedExp] = useState<ExpirationOption>('24h');
   const [enablePin, setEnablePin] = useState(false);
   const [pin, setPin] = useState('');
+  const [showPinText, setShowPinText] = useState(false);
   const [allowFileUploads, setAllowFileUploads] = useState(true);
   const [allowViewOnce, setAllowViewOnce] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Close on Escape key & lock body scroll
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isCreating) {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = 'unset';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, isCreating, onClose]);
 
   if (!isOpen) return null;
 
@@ -47,7 +67,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
     setError(null);
 
     if (enablePin && pin.trim().length < 4) {
-      setError('PIN must be at least 4 digits/characters');
+      setError('Password/PIN must be at least 4 characters');
       return;
     }
 
@@ -124,7 +144,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
         console.warn('Firestore room sync note:', fsErr);
       }
 
-      onRoomCreated(roomId, rawKeyBase64, enablePin, createdData.expiresAt);
+      onRoomCreated(roomId, rawKeyBase64, enablePin, createdData.expiresAt, pinHash);
     } catch (err: any) {
       console.error('Room creation error:', err);
       setError(err.message || 'Error initializing secure room');
@@ -134,23 +154,29 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in overflow-y-auto">
-      <div className="relative w-full max-w-lg bg-[#0a0a0a] border border-white/10 rounded-2xl p-6 sm:p-7 text-slate-100 shadow-2xl space-y-6 my-6">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isCreating) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fade-in overflow-y-auto"
+    >
+      <div className="relative w-full max-w-lg bg-[#0c0e14] border border-white/10 rounded-2xl p-5 sm:p-7 text-slate-100 shadow-2xl space-y-5 my-auto max-h-[92dvh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/5 pb-4">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-center text-indigo-400">
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Create Private Room</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white tracking-tight">Create Private Room</h2>
               <p className="text-xs text-slate-400">Zero-Knowledge Encrypted & Auto-Expiring</p>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={isCreating}
-            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition"
+            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-white/5 transition cursor-pointer"
+            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -163,19 +189,19 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleCreate} className="space-y-5">
+        <form onSubmit={handleCreate} className="space-y-4 sm:space-y-5">
           {/* Optional Room Topic/Title */}
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-slate-300">
-              Room Label <span className="text-slate-500">(Optional)</span>
+              Room Name <span className="text-slate-500 font-normal">(Optional)</span>
             </label>
             <input
               type="text"
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="e.g. Secret Project, Strategic Sync, Private Chat"
+              placeholder="e.g. Confidential Sync, Project Vault"
               maxLength={40}
-              className="w-full px-3.5 py-2.5 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+              className="w-full px-3.5 py-2.5 bg-[#141722] border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
             />
           </div>
 
@@ -183,9 +209,9 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
           <div className="space-y-2">
             <label className="block text-xs font-medium text-slate-300 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-indigo-400" />
-              Automatic Room Lifespan
+              Room Expiration Timer
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {EXPIRATION_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
@@ -193,25 +219,25 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
                   onClick={() => setSelectedExp(opt.value)}
                   className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                     selectedExp === opt.value
-                      ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300 shadow-sm'
-                      : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200'
+                      ? 'bg-indigo-500/15 border-indigo-500/60 text-indigo-200 ring-1 ring-indigo-500/30'
+                      : 'bg-[#141722]/70 border-white/5 text-slate-400 hover:bg-[#141722] hover:text-slate-200'
                   }`}
                 >
                   <div className="text-xs font-semibold">{opt.label}</div>
-                  <div className="text-[10px] text-slate-500 font-mono truncate">{opt.desc}</div>
+                  <div className="text-[10px] text-slate-500 truncate">{opt.desc}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Optional Security: PIN Protection */}
-          <div className="p-3.5 bg-white/5 border border-white/5 rounded-xl space-y-3">
+          {/* Optional Security: Password/PIN Protection */}
+          <div className="p-3.5 bg-[#141722] border border-white/10 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Lock className="w-4 h-4 text-indigo-400" />
+              <div className="flex items-center gap-2.5">
+                <KeyRound className="w-4 h-4 text-indigo-400" />
                 <div>
-                  <div className="text-xs font-medium text-slate-200">Optional PIN Passphrase</div>
-                  <div className="text-[11px] text-slate-400">Require PIN gate before decrypting session</div>
+                  <div className="text-xs font-medium text-slate-200">Room Password / PIN</div>
+                  <div className="text-[11px] text-slate-400">Require passphrase before entering room</div>
                 </div>
               </div>
               <input
@@ -224,22 +250,36 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
             </div>
 
             {enablePin && (
-              <div className="pt-2 animate-fade-in">
-                <input
-                  type="password"
-                  value={pin}
-                  onChange={e => setPin(e.target.value)}
-                  placeholder="Enter 4-8 digit PIN code"
-                  maxLength={16}
-                  className="w-full px-3.5 py-2 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
+              <div className="pt-2 animate-fade-in space-y-2">
+                <div className="relative flex items-center">
+                  <input
+                    type={showPinText ? 'text' : 'password'}
+                    value={pin}
+                    onChange={e => setPin(e.target.value)}
+                    placeholder="Enter 4-32 character password or PIN"
+                    maxLength={32}
+                    autoFocus
+                    className="w-full px-3.5 py-2.5 pr-10 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPinText(!showPinText)}
+                    className="absolute right-3 text-slate-400 hover:text-slate-200 p-1 cursor-pointer"
+                    title={showPinText ? 'Hide password' : 'Show password'}
+                  >
+                    {showPinText ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Password is cryptographic-salted and never sent in plaintext.
+                </p>
               </div>
             )}
           </div>
 
           {/* Media Feature Toggles */}
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <label className="flex items-center gap-2 p-3 bg-white/5 border border-white/5 rounded-xl cursor-pointer hover:bg-white/10 transition">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <label className="flex items-center gap-2.5 p-3 bg-[#141722] border border-white/10 rounded-xl cursor-pointer hover:border-white/20 transition">
               <input
                 type="checkbox"
                 checked={allowFileUploads}
@@ -248,11 +288,11 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
               />
               <div className="flex items-center gap-1.5 text-slate-300">
                 <FileUp className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Encrypted Files</span>
+                <span>Encrypted Attachments</span>
               </div>
             </label>
 
-            <label className="flex items-center gap-2 p-3 bg-white/5 border border-white/5 rounded-xl cursor-pointer hover:bg-white/10 transition">
+            <label className="flex items-center gap-2.5 p-3 bg-[#141722] border border-white/10 rounded-xl cursor-pointer hover:border-white/20 transition">
               <input
                 type="checkbox"
                 checked={allowViewOnce}
@@ -267,10 +307,10 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
           </div>
 
           {/* Privacy Guarantee Note */}
-          <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-start gap-2 text-[11px] text-indigo-300 leading-relaxed">
-            <Sparkles className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-start gap-2.5 text-[11px] text-emerald-300 leading-relaxed">
+            <Sparkles className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
             <span>
-              A 256-bit AES key is generated on your device. The key will be embedded only in your URL hash (<code className="font-mono text-indigo-200">#key=...</code>) and never seen by the server.
+              256-bit AES-GCM key generated in browser. Key remains inside the URL hash fragment (<code className="font-mono text-emerald-200">#key=...</code>) and is never transmitted to any server.
             </span>
           </div>
 
@@ -280,7 +320,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={isCreating}
-              className="px-4 py-2.5 text-xs font-medium text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
+              className="px-4 py-2.5 text-xs font-medium text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition cursor-pointer"
             >
               Cancel
             </button>
