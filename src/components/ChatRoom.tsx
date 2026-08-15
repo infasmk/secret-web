@@ -256,14 +256,55 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     };
   }, [roomId, roomMeta?.id, isDestroyed, cryptoKey]);
 
-  // 4b. Initialize Firestore Real-Time Message Listener
+  // 4b. Initialize Firestore Real-Time Room Metadata & Message Listener
   useEffect(() => {
-    if (!roomId || isDestroyed) return;
+    if (!roomId) return;
 
+    // Room Status Listener
+    const roomDocRef = doc(db, 'rooms', roomId);
+    const unsubRoom = onSnapshot(
+      roomDocRef,
+      docSnap => {
+        if (docSnap.exists()) {
+          const d = docSnap.data();
+          if (d.destroyed) {
+            setIsDestroyed(true);
+            setDestroyedReason('Room destroyed by participant');
+          } else if (d.expiresAt && Date.now() >= d.expiresAt) {
+            setIsDestroyed(true);
+            setDestroyedReason('Room has expired');
+          } else {
+            setRoomMeta(prev => ({
+              id: roomId,
+              title: d.name || prev?.title || 'Private Session',
+              createdAt: d.createdAt || prev?.createdAt || Date.now(),
+              expiresAt: d.expiresAt || prev?.expiresAt || (Date.now() + 86400000),
+              creatorId: d.createdBy || prev?.creatorId || 'anon_creator',
+              status: 'active',
+              security: {
+                hasPin: d.hasPin ?? prev?.security.hasPin ?? false,
+                pinSalt: d.salt ?? prev?.security.pinSalt ?? '',
+                allowFileUploads: d.allowFiles !== false,
+                allowViewOnce: d.allowViewOnce !== false,
+                maxFileSizeMb: 25,
+              },
+              encryptionVersion: 'AES-GCM-256',
+              memberCount: prev?.memberCount || 1,
+            }));
+            setIsLoading(false);
+          }
+        }
+      },
+      err => {
+        console.warn('Firestore room sync notice:', err);
+      }
+    );
+
+    // Room Messages Listener
     const messagesCollection = collection(db, 'rooms', roomId, 'messages');
     const q = query(messagesCollection, orderBy('timestamp', 'asc'), limit(200));
 
-    const unsubscribe = onSnapshot(
+    const unsubMessages = onSnapshot(
       q,
       async snapshot => {
         const remoteMsgs: ChatMessage[] = [];
@@ -313,7 +354,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubRoom();
+      unsubMessages();
+    };
   }, [roomId, isDestroyed, cryptoKey]);
 
   // 5. Decrypt text messages whenever cryptoKey updates
@@ -550,6 +594,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       await fetch(`/api/rooms/${encodeURIComponent(roomId)}/destroy`, {
         method: 'POST',
       });
+    } catch (_) {}
+
+    try {
+      await setDoc(doc(db, 'rooms', roomId), { destroyed: true }, { merge: true });
     } catch (_) {}
 
     setIsDestroyed(true);

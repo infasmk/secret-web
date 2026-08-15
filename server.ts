@@ -165,14 +165,35 @@ app.post('/api/rooms/create', (req, res) => {
 
 // Get Room Metadata (public info only, no keys/plaintext)
 app.get('/api/rooms/:id', (req, res) => {
-  const room = rooms.get(req.params.id);
+  let room = rooms.get(req.params.id);
   const now = Date.now();
 
   if (!room) {
-    return res.status(404).json({ error: 'Room not found or has been permanently destroyed' });
+    // Dynamically register active room session in memory
+    room = {
+      id: req.params.id,
+      title: 'Private Session',
+      createdAt: now,
+      expiresAt: now + 86400000,
+      creatorId: 'anon',
+      security: {
+        hasPin: false,
+        pinSalt: '',
+        pinHash: '',
+        allowFileUploads: true,
+        allowViewOnce: true,
+        maxFileSizeMb: 25,
+      },
+      status: 'active',
+      encryptionVersion: 'AES-GCM-256',
+      members: new Map(),
+      messages: [],
+      fileIds: new Set(),
+    };
+    rooms.set(req.params.id, room);
   }
 
-  if (room.status !== 'active' || now >= room.expiresAt) {
+  if (room.status === 'destroyed' || now >= room.expiresAt) {
     return res.status(410).json({
       error: 'This private room has expired or was destroyed',
       status: room.status === 'destroyed' ? 'destroyed' : 'expired',
@@ -429,8 +450,32 @@ function handleWsMessage(ws: WebSocket, client: ClientConnection, msg: any) {
     return;
   }
 
-  const room = rooms.get(roomId);
-  if (!room || room.status !== 'active') {
+  let room = rooms.get(roomId);
+  if (!room) {
+    room = {
+      id: roomId,
+      title: 'Private Session',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 86400000,
+      creatorId: memberId || 'anon',
+      security: {
+        hasPin: false,
+        pinSalt: '',
+        pinHash: '',
+        allowFileUploads: true,
+        allowViewOnce: true,
+        maxFileSizeMb: 25,
+      },
+      status: 'active',
+      encryptionVersion: 'AES-GCM-256',
+      members: new Map(),
+      messages: [],
+      fileIds: new Set(),
+    };
+    rooms.set(roomId, room);
+  }
+
+  if (room.status === 'destroyed' || (room.expiresAt && Date.now() >= room.expiresAt)) {
     ws.send(JSON.stringify({ type: 'room_destroyed', roomId, payload: { reason: 'Room expired or destroyed' } }));
     return;
   }
