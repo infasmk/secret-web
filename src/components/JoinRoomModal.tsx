@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { LogIn, Key, Lock, AlertCircle, ArrowRight, X } from 'lucide-react';
 import { hashPin } from '../lib/crypto';
+import { parseResponseJson } from '../lib/api';
 
 interface JoinRoomModalProps {
   isOpen: boolean;
@@ -65,13 +66,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
     try {
       // Check room status from server
       const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`);
-      if (!res.ok) {
-        if (res.status === 404) throw new Error('Room not found or has been destroyed');
-        if (res.status === 410) throw new Error('This private room has expired and was wiped');
-        throw new Error('Could not connect to room');
-      }
-
-      const meta = await res.json();
+      const meta = await parseResponseJson<any>(res);
 
       if (meta.security?.hasPin && !needsPin) {
         setNeedsPin(true);
@@ -96,10 +91,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
           body: JSON.stringify({ pinHash: calculatedPinHash }),
         });
 
-        if (!pinRes.ok) {
-          const pinData = await pinRes.json();
-          throw new Error(pinData.error || 'Incorrect PIN');
-        }
+        await parseResponseJson<any>(pinRes);
       }
 
       onJoinRoom(roomId, extractedKey || undefined, calculatedPinHash || undefined);

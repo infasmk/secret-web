@@ -664,6 +664,22 @@ setInterval(() => {
   } catch (_) {}
 }, 10000);
 
+// API 404 handler (Catch any invalid /api requests and return clean JSON)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+});
+
+// API Error Handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.path.startsWith('/api')) {
+    console.error('API Error:', err);
+    return res.status(err.status || 500).json({
+      error: err.message || 'Internal server error',
+    });
+  }
+  next(err);
+});
+
 // ----------------------------------------------------
 // VITE INTEGRATION / PRODUCTION SPA SERVING
 // ----------------------------------------------------

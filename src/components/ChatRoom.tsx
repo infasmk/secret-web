@@ -18,6 +18,7 @@ import {
   bufferToBase64Url,
 } from '../lib/crypto';
 import { generateAnonymousIdentity } from '../lib/anonymousNames';
+import { parseResponseJson } from '../lib/api';
 import { ChatMessage, RoomMember, RoomMetadata, WsServerMessage } from '../types';
 import { Shield, Lock, AlertCircle, ArrowLeft, RefreshCw, Trash2, Clock, Sparkles } from 'lucide-react';
 
@@ -106,18 +107,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     setRoomError(null);
 
     fetch(`/api/rooms/${encodeURIComponent(roomId)}`)
-      .then(async res => {
-        if (!res.ok) {
-          const data = await res.json();
-          if (res.status === 410) {
-            setIsDestroyed(true);
-            setDestroyedReason(data.destructionReason || 'Room expired');
-            throw new Error(data.error || 'This room has expired or was destroyed');
-          }
-          throw new Error(data.error || 'Failed to load room');
-        }
-        return res.json();
-      })
+      .then(res => parseResponseJson<RoomMetadata>(res))
       .then(meta => {
         if (isMounted) {
           setRoomMeta(meta);
@@ -348,10 +338,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to upload encrypted file');
-      }
+      await parseResponseJson<any>(res);
 
       setUploadProgress(90);
 
@@ -402,11 +389,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     }
 
     const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/media/${encodeURIComponent(fileId)}`);
-    if (!res.ok) {
-      throw new Error('File not available or has already been burned');
-    }
-
-    const { iv, data } = await res.json();
+    const { iv, data } = await parseResponseJson<{ iv: string; data: string }>(res);
     const binaryEncrypted = Uint8Array.from(atob(data), c => c.charCodeAt(0)).buffer;
 
     // Decrypt binary in browser memory

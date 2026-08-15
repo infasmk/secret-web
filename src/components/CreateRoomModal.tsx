@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { Shield, Clock, Lock, FileUp, Eye, Sparkles, AlertCircle, ArrowRight, X } from 'lucide-react';
 import { generateRoomKey, exportKeyToBase64, hashPin, generateSalt } from '../lib/crypto';
 import { generateSecureRoomId } from '../lib/anonymousNames';
+import { parseResponseJson } from '../lib/api';
 import { ExpirationOption } from '../types';
 
 interface CreateRoomModalProps {
@@ -90,12 +91,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to create room');
-      }
-
-      const createdData = await res.json();
+      const createdData = await parseResponseJson<{ expiresAt: number; id: string }>(res);
       onRoomCreated(roomId, rawKeyBase64, enablePin, createdData.expiresAt);
     } catch (err: any) {
       console.error('Room creation error:', err);
