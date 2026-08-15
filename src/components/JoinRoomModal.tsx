@@ -66,29 +66,52 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
       }
 
       // Handle full URL or room ID + hash
-      if (raw.includes('/room/')) {
-        const parts = raw.split('/room/')[1];
-        const [idPart, hashPart] = parts.split('#');
-        roomId = idPart.split('?')[0].trim();
-        if (hashPart && hashPart.includes('key=')) {
-          key = hashPart.split('key=')[1]?.split('&')[0];
+      let cleaned = raw;
+      if (cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
+        try {
+          const parsedUrl = new URL(cleaned);
+          if (parsedUrl.searchParams.get('room')) {
+            roomId = parsedUrl.searchParams.get('room')!;
+          } else if (parsedUrl.searchParams.get('r')) {
+            roomId = parsedUrl.searchParams.get('r')!;
+          } else if (parsedUrl.pathname.includes('/room/')) {
+            roomId = parsedUrl.pathname.split('/room/')[1].split('/')[0];
+          }
+          if (parsedUrl.hash.includes('key=')) {
+            key = parsedUrl.hash.split('key=')[1]?.split('&')[0];
+          } else if (parsedUrl.searchParams.get('key')) {
+            key = parsedUrl.searchParams.get('key')!;
+          }
+        } catch (_) {}
+      }
+
+      if (!roomId) {
+        if (raw.includes('/room/')) {
+          const parts = raw.split('/room/')[1];
+          const [idPart, hashPart] = parts.split('#');
+          roomId = idPart.split('?')[0].trim();
+          if (hashPart && hashPart.includes('key=')) {
+            key = hashPart.split('key=')[1]?.split('&')[0];
+          }
+        } else if (raw.includes('?room=') || raw.includes('&room=')) {
+          const queryString = raw.split('?')[1] || raw;
+          const urlParams = new URLSearchParams(queryString.split('#')[0]);
+          roomId = urlParams.get('room') || urlParams.get('r') || '';
+          if (raw.includes('#key=')) {
+            key = raw.split('#key=')[1]?.split('&')[0]?.trim();
+          }
+        } else if (raw.includes('#key=')) {
+          const [idPart, keyPart] = raw.split('#key=');
+          roomId = idPart.replace(/^.*\?room=/, '').replace(/^.*\/room\//, '').trim();
+          key = keyPart.split('&')[0].trim();
+        } else {
+          roomId = raw.trim();
         }
-      } else if (raw.includes('#key=')) {
-        const [idPart, keyPart] = raw.split('#key=');
-        roomId = idPart.replace(/^.*\?room=/, '').trim();
-        key = keyPart.split('&')[0].trim();
-      } else if (raw.includes('?room=') || raw.includes('&room=')) {
-        const urlParams = new URLSearchParams(raw.split('?')[1] || '');
-        roomId = urlParams.get('room') || '';
-        if (raw.includes('#key=')) {
-          key = raw.split('#key=')[1]?.split('&')[0]?.trim();
-        }
-      } else {
-        roomId = raw.trim();
       }
 
       if (!roomId) {
         setError('Invalid room link or format');
+        setIsVerifying(false);
         return;
       }
 

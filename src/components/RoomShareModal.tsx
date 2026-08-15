@@ -11,7 +11,8 @@ interface RoomShareModalProps {
   rawKeyBase64: string;
   expiresAt: number;
   hasPin: boolean;
-  onEnterRoom: () => void;
+  pinHash?: string;
+  onEnterRoom: (pinHash?: string) => void;
   onClose?: () => void;
 }
 
@@ -21,6 +22,7 @@ export const RoomShareModal: React.FC<RoomShareModalProps> = ({
   rawKeyBase64,
   expiresAt,
   hasPin,
+  pinHash,
   onEnterRoom,
   onClose,
 }) => {
@@ -186,7 +188,7 @@ export const RoomShareModal: React.FC<RoomShareModalProps> = ({
 
         {/* Enter Room Button */}
         <button
-          onClick={onEnterRoom}
+          onClick={() => onEnterRoom(pinHash)}
           className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-indigo-600/25 transition flex items-center justify-center gap-2 cursor-pointer"
         >
           <span>Enter Room Now</span>

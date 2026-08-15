@@ -16,13 +16,14 @@ import {
   encryptBinary,
   decryptBinary,
   bufferToBase64Url,
+  hashPin,
 } from '../lib/crypto';
 import { generateAnonymousIdentity } from '../lib/anonymousNames';
 import { parseResponseJson, safeFetch } from '../lib/api';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, doc, setDoc, getDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { ChatMessage, RoomMember, RoomMetadata, WsServerMessage } from '../types';
-import { Shield, Lock, AlertCircle, ArrowLeft, RefreshCw, Trash2, Clock, Sparkles } from 'lucide-react';
+import { Shield, Lock, AlertCircle, ArrowLeft, RefreshCw, Trash2, Clock, Sparkles, Eye, EyeOff, Key } from 'lucide-react';
 
 interface ChatRoomProps {
   roomId: string;
@@ -61,6 +62,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const [typingUsers, setTypingUsers] = useState<Map<string, string>>(new Map());
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+
+  // PIN Verification State
+  const [isPinVerified, setIsPinVerified] = useState<boolean>(() => Boolean(initialPinHash));
+  const [pinInput, setPinInput] = useState('');
+  const [showPin, setShowPin] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);
 
   // Modals & Viewers
   const [showShareModal, setShowShareModal] = useState(false);
@@ -108,14 +116,18 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     setIsLoading(true);
     setRoomError(null);
 
-    const loadMeta = async () => {
+    const loadMeta = async (attempt = 1) => {
       try {
         const res = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}`);
         if (res.ok) {
           const meta = await parseResponseJson<RoomMetadata>(res);
           if (isMounted) {
             setRoomMeta(meta);
+            setRoomError(null);
             setIsLoading(false);
+            if (!meta.security?.hasPin || (initialPinHash && initialPinHash === meta.security?.pinHash)) {
+              setIsPinVerified(true);
+            }
             return;
           }
         }
@@ -138,19 +150,32 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
             security: {
               hasPin: d.hasPin || false,
               pinSalt: d.salt || '',
+              pinHash: d.pinHash || '',
               allowFileUploads: d.allowFiles !== false,
               allowViewOnce: d.allowViewOnce !== false,
-              maxFileSizeMb: 25,
+              maxFileSizeMb: 50,
             },
             encryptionVersion: 'AES-GCM-256',
             memberCount: 1,
           };
           setRoomMeta(meta);
+          setRoomError(null);
           setIsLoading(false);
+          if (!meta.security?.hasPin || (initialPinHash && initialPinHash === meta.security?.pinHash)) {
+            setIsPinVerified(true);
+          }
           return;
         }
       } catch (fsErr) {
         console.warn('Firestore fallback note:', fsErr);
+      }
+
+      // If first attempt failed, retry once quickly before setting error (handles race conditions during creation)
+      if (attempt < 2 && isMounted) {
+        setTimeout(() => {
+          if (isMounted) loadMeta(attempt + 1);
+        }, 500);
+        return;
       }
 
       if (isMounted) {
@@ -164,7 +189,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [roomId]);
+  }, [roomId, initialPinHash]);
 
   // 4. Initialize WebSocket Connection & Handlers
   useEffect(() => {
@@ -284,14 +309,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               security: {
                 hasPin: d.hasPin ?? prev?.security.hasPin ?? false,
                 pinSalt: d.salt ?? prev?.security.pinSalt ?? '',
+                pinHash: d.pinHash ?? prev?.security.pinHash ?? '',
                 allowFileUploads: d.allowFiles !== false,
                 allowViewOnce: d.allowViewOnce !== false,
-                maxFileSizeMb: 25,
+                maxFileSizeMb: 50,
               },
               encryptionVersion: 'AES-GCM-256',
               memberCount: prev?.memberCount || 1,
             }));
+            setRoomError(null);
             setIsLoading(false);
+            if (!d.hasPin || (initialPinHash && initialPinHash === d.pinHash)) {
+              setIsPinVerified(true);
+            }
           }
         }
       },
@@ -477,7 +507,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     setUploadProgress(10);
 
     try {
-      const fileId = `vault_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+      const fileId = `vault_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const fileBuffer = await file.arrayBuffer();
       setUploadProgress(35);
 
@@ -485,27 +515,41 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       const { iv, encryptedData } = await encryptBinary(fileBuffer, cryptoKey);
       setUploadProgress(60);
 
-      // Convert encrypted ArrayBuffer to Base64 for HTTP upload
+      // Convert encrypted ArrayBuffer to Base64
       const base64Encrypted = bufferToBase64Url(encryptedData);
 
-      // Upload encrypted blob to server ephemeral vault
-      const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/media`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileId,
-          iv,
-          encryptedData: base64Encrypted,
-          fileSize: file.size,
-          mimeType: file.type || 'application/octet-stream',
-          fileName: file.name,
-          isViewOnce,
-        }),
-      });
+      // Local session cache for instant preview & zero-delay decryption
+      try {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem(`vault_${fileId}`, JSON.stringify({
+            iv,
+            data: base64Encrypted,
+            mimeType: file.type || 'application/octet-stream',
+            fileName: file.name,
+          }));
+        }
+      } catch (_) {}
 
-      await parseResponseJson<any>(res);
+      // Try upload encrypted blob to server ephemeral vault
+      try {
+        await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}/media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileId,
+            iv,
+            encryptedData: base64Encrypted,
+            fileSize: file.size,
+            mimeType: file.type || 'application/octet-stream',
+            fileName: file.name,
+            isViewOnce,
+          }),
+        });
+      } catch (err) {
+        console.warn('Server vault upload note (using client-side ciphertext sync):', err);
+      }
 
-      setUploadProgress(90);
+      setUploadProgress(85);
 
       // Encrypt file name for message payload
       const encryptedFileName = await encryptText(file.name, cryptoKey);
@@ -515,7 +559,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       else if (file.type.startsWith('video/')) msgType = 'video';
 
       const msgPayload = {
-        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         type: msgType,
         encryptedContent: encryptedFileName,
         media: {
@@ -528,6 +572,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         isViewOnce,
       };
 
+      // Broadcast via WebSocket
       socketRef.current?.send({
         type: 'message',
         roomId,
@@ -536,6 +581,36 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         avatarColor,
         payload: msgPayload,
       });
+
+      // Also persist encrypted metadata to Firestore
+      try {
+        const firestorePayload: any = {
+          id: msgPayload.id,
+          roomId,
+          sender: identity.id,
+          senderAlias: displayName,
+          senderColor: avatarColor,
+          senderAvatar: 'user',
+          encryptedText: encryptedFileName.ciphertext,
+          iv: encryptedFileName.iv,
+          viewOnce: isViewOnce,
+          viewed: false,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type || 'application/octet-stream',
+          timestamp: Date.now(),
+          expiresAt: roomMeta?.expiresAt || Date.now() + 86400000,
+        };
+
+        // If file is moderately sized (< 400KB), embed cipher directly in Firestore message document for resilient sharing
+        if (base64Encrypted.length <= 400000) {
+          firestorePayload.fileCipher = base64Encrypted;
+        }
+
+        await setDoc(doc(db, 'rooms', roomId, 'messages', msgPayload.id), firestorePayload);
+      } catch (fsErr) {
+        console.warn('Firestore media record note:', fsErr);
+      }
 
       setUploadProgress(100);
     } finally {
@@ -548,22 +623,111 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const handleDecryptMedia = async (fileId: string, mimeType: string, fileName: string): Promise<string | null> => {
     if (!cryptoKey) throw new Error('Key missing');
 
-    // Check memory cache
+    // 1. Check in-memory object URL cache
     if (decryptedBlobUrlsRef.current.has(fileId)) {
       return decryptedBlobUrlsRef.current.get(fileId)!;
     }
 
-    const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/media/${encodeURIComponent(fileId)}`);
-    const { iv, data } = await parseResponseJson<{ iv: string; data: string }>(res);
-    const binaryEncrypted = Uint8Array.from(atob(data), c => c.charCodeAt(0)).buffer;
+    // 2. Check browser session storage
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const cachedRaw = sessionStorage.getItem(`vault_${fileId}`);
+        if (cachedRaw) {
+          const { iv, data } = JSON.parse(cachedRaw);
+          const binaryEncrypted = Uint8Array.from(atob(data.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)).buffer;
+          const decryptedBuffer = await decryptBinary(binaryEncrypted, iv, cryptoKey);
+          const blob = new Blob([decryptedBuffer], { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          decryptedBlobUrlsRef.current.set(fileId, url);
+          return url;
+        }
+      }
+    } catch (_) {}
 
-    // Decrypt binary in browser memory
-    const decryptedBuffer = await decryptBinary(binaryEncrypted, iv, cryptoKey);
-    const blob = new Blob([decryptedBuffer], { type: mimeType });
-    const url = URL.createObjectURL(blob);
+    // 3. Fetch from Server Ephemeral Media Vault
+    try {
+      const res = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}/media/${encodeURIComponent(fileId)}`);
+      if (res.ok) {
+        const { iv, data } = await parseResponseJson<{ iv: string; data: string }>(res);
+        const binaryEncrypted = Uint8Array.from(atob(data.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)).buffer;
+        const decryptedBuffer = await decryptBinary(binaryEncrypted, iv, cryptoKey);
+        const blob = new Blob([decryptedBuffer], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        decryptedBlobUrlsRef.current.set(fileId, url);
+        return url;
+      }
+    } catch (srvErr) {
+      console.warn('Server media fetch note, checking Firestore fallback:', srvErr);
+    }
 
-    decryptedBlobUrlsRef.current.set(fileId, url);
-    return url;
+    // 4. Fallback to Firestore message payload if embedded
+    try {
+      const q = query(collection(db, 'rooms', roomId, 'messages'), limit(50));
+      const snap = await getDoc(doc(db, 'rooms', roomId));
+      // Try finding message doc
+      const msgSnap = await getDoc(doc(db, 'rooms', roomId, 'messages', fileId));
+      if (msgSnap.exists()) {
+        const d = msgSnap.data();
+        if (d.fileCipher && d.iv) {
+          const binaryEncrypted = Uint8Array.from(atob(d.fileCipher.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)).buffer;
+          const decryptedBuffer = await decryptBinary(binaryEncrypted, d.iv, cryptoKey);
+          const blob = new Blob([decryptedBuffer], { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          decryptedBlobUrlsRef.current.set(fileId, url);
+          return url;
+        }
+      }
+    } catch (fsErr) {
+      console.warn('Firestore media fallback error:', fsErr);
+    }
+
+    throw new Error('Could not retrieve or decrypt media attachment');
+  };
+
+  // Handle PIN / Password Challenge Form Submit
+  const handlePinChallengeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pinInput.trim()) {
+      setPinError('Please enter the room password or PIN');
+      return;
+    }
+
+    setIsSubmittingPin(true);
+    setPinError(null);
+
+    try {
+      const salt = roomMeta?.security?.pinSalt || '';
+      const calculatedHash = await hashPin(pinInput.trim(), salt);
+
+      // Check if room metadata has pinHash locally
+      if (roomMeta?.security?.pinHash && calculatedHash !== roomMeta.security.pinHash) {
+        throw new Error('Incorrect room password or PIN');
+      }
+
+      // Verify with server endpoint
+      try {
+        const verifyRes = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}/verify-pin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinHash: calculatedHash }),
+        });
+        if (verifyRes.status === 401 || verifyRes.status === 429) {
+          const err = await parseResponseJson<{ error?: string }>(verifyRes);
+          throw new Error(err.error || 'Incorrect password or PIN');
+        }
+      } catch (srvErr: any) {
+        if (srvErr.message?.includes('Incorrect') || srvErr.message?.includes('Locked')) {
+          throw srvErr;
+        }
+      }
+
+      setIsPinVerified(true);
+      setPinError(null);
+    } catch (err: any) {
+      setPinError(err.message || 'Incorrect password or PIN');
+    } finally {
+      setIsSubmittingPin(false);
+    }
   };
 
   // Burn Media Trigger
@@ -710,15 +874,93 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               <button
                 type="button"
                 onClick={onExit}
-                className="w-1/3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium rounded-xl border border-white/10 transition"
+                className="w-1/3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium rounded-xl border border-white/10 transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/20 transition"
+                className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/20 transition cursor-pointer"
               >
                 Unlock Session
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Prompt for PIN / Password if Room is Protected & Not Yet Verified
+  if (roomMeta?.security?.hasPin && !isPinVerified) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-6 bg-[#050505] text-slate-100 min-h-screen animate-fade-in">
+        <div className="w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-7 space-y-5 text-center shadow-2xl">
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto shadow-lg shadow-amber-500/10">
+            <Lock className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold text-white">Password Protected Room</h2>
+            <p className="text-xs text-slate-400">
+              The creator locked this session with a security PIN / password.
+            </p>
+          </div>
+
+          {pinError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-300 flex items-center gap-2 text-left">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+              <span>{pinError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handlePinChallengeSubmit} className="space-y-4 text-left">
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                Room Password or PIN
+              </label>
+              <div className="relative">
+                <input
+                  type={showPin ? 'text' : 'password'}
+                  value={pinInput}
+                  onChange={e => {
+                    setPinInput(e.target.value);
+                    if (pinError) setPinError(null);
+                  }}
+                  placeholder="Enter passcode..."
+                  autoFocus
+                  className="w-full pl-3.5 pr-10 py-2.5 bg-black/50 border border-white/10 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPin(!showPin)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                >
+                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onExit}
+                className="w-1/3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium rounded-xl border border-white/10 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmittingPin || !pinInput.trim()}
+                className="w-2/3 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-lg shadow-amber-600/20 transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {isSubmittingPin ? (
+                  <span className="inline-block w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Key className="w-3.5 h-3.5" />
+                    <span>Verify & Enter</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

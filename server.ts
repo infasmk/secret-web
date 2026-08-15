@@ -14,9 +14,20 @@ const PORT = 3000;
 const app = express();
 const server = http.createServer(app);
 
-// Enable JSON parser with 30MB limit for encrypted media blobs
-app.use(express.json({ limit: '30mb' }));
-app.use(express.urlencoded({ extended: true, limit: '30mb' }));
+// Enable JSON parser with 50MB limit for encrypted media blobs
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// CORS & Preflight handler for API routes
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // Ephemeral Media Storage Directory
 const TEMP_UPLOADS_DIR = path.join(process.cwd(), '.temp_vault');
@@ -277,15 +288,43 @@ app.get('/api/rooms/:id/messages', (req, res) => {
   res.json({ messages: filtered });
 });
 
+// Helper to get or auto-initialize room in memory
+function getOrInitRoom(roomId: string): StoredRoom {
+  let room = rooms.get(roomId);
+  if (!room) {
+    const now = Date.now();
+    room = {
+      id: roomId,
+      title: 'Private Session',
+      createdAt: now,
+      expiresAt: now + 86400000,
+      creatorId: 'anon',
+      security: {
+        hasPin: false,
+        pinSalt: '',
+        pinHash: '',
+        allowFileUploads: true,
+        allowViewOnce: true,
+        maxFileSizeMb: 50,
+      },
+      status: 'active',
+      encryptionVersion: 'AES-GCM-256',
+      members: new Map(),
+      messages: [],
+      fileIds: new Set(),
+    };
+    rooms.set(roomId, room);
+  }
+  return room;
+}
+
 // Encrypted Media Upload
 app.post('/api/rooms/:id/media', (req, res) => {
-  const room = rooms.get(req.params.id);
-  if (!room || room.status !== 'active') {
-    return res.status(404).json({ error: 'Room not found' });
-  }
+  const roomId = req.params.id;
+  const room = getOrInitRoom(roomId);
 
-  if (!room.security.allowFileUploads) {
-    return res.status(403).json({ error: 'File uploads are disabled in this room' });
+  if (room.status === 'destroyed') {
+    return res.status(410).json({ error: 'This room has been destroyed' });
   }
 
   const { fileId, iv, encryptedData, fileSize, mimeType, isViewOnce, fileName } = req.body;
@@ -294,22 +333,23 @@ app.post('/api/rooms/:id/media', (req, res) => {
     return res.status(400).json({ error: 'Missing encrypted media payload' });
   }
 
-  const maxBytes = (room.security.maxFileSizeMb || 25) * 1024 * 1024;
-  if (fileSize > maxBytes) {
-    return res.status(413).json({ error: `File exceeds room limit of ${room.security.maxFileSizeMb}MB` });
+  const maxBytes = (room.security?.maxFileSizeMb || 50) * 1024 * 1024;
+  if (fileSize && fileSize > maxBytes) {
+    return res.status(413).json({ error: `File exceeds maximum room limit` });
   }
 
   try {
     const binaryBuffer = Buffer.from(encryptedData, 'base64');
-    const filePath = path.join(TEMP_UPLOADS_DIR, `${room.id}_${fileId}.vault`);
-    fs.writeFileSync(filePath, JSON.stringify({ iv, data: binaryBuffer.toString('base64'), mimeType }));
+    const filePath = path.join(TEMP_UPLOADS_DIR, `${roomId}_${fileId}.vault`);
+    fs.writeFileSync(filePath, JSON.stringify({ iv, data: binaryBuffer.toString('base64'), mimeType, fileName }));
     room.fileIds.add(fileId);
 
-    res.status(201).json({
+    res.status(200).json({
       fileId,
       size: binaryBuffer.length,
       isViewOnce: Boolean(isViewOnce),
       uploadedAt: Date.now(),
+      success: true,
     });
   } catch (err) {
     console.error('Media upload storage error:', err);
@@ -320,9 +360,10 @@ app.post('/api/rooms/:id/media', (req, res) => {
 // Download Encrypted Media Stream
 app.get('/api/rooms/:id/media/:fileId', (req, res) => {
   const { id: roomId, fileId } = req.params;
-  const room = rooms.get(roomId);
-  if (!room || room.status !== 'active') {
-    return res.status(404).json({ error: 'Room not found' });
+  const room = getOrInitRoom(roomId);
+
+  if (room.status === 'destroyed') {
+    return res.status(410).json({ error: 'Room destroyed' });
   }
 
   const filePath = path.join(TEMP_UPLOADS_DIR, `${roomId}_${fileId}.vault`);

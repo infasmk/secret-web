@@ -25,6 +25,7 @@ export default function App() {
     rawKeyBase64: string;
     hasPin: boolean;
     expiresAt: number;
+    pinHash?: string;
   } | null>(null);
 
   // Initial Route Check (handles incoming shared links, e.g. /room/abc-123#key=... or ?room=abc-123#key=...)
@@ -92,22 +93,24 @@ export default function App() {
     roomId: string,
     rawKeyBase64: string,
     hasPin: boolean,
-    expiresAt: number
+    expiresAt: number,
+    pinHash?: string
   ) => {
     setIsCreateOpen(false);
     // Show the share screen first so creator can copy link
-    setCreatedRoomInfo({ roomId, rawKeyBase64, hasPin, expiresAt });
+    setCreatedRoomInfo({ roomId, rawKeyBase64, hasPin, expiresAt, pinHash });
   };
 
   // Enter the newly created room
-  const handleEnterCreatedRoom = () => {
+  const handleEnterCreatedRoom = (enteredPinHash?: string) => {
     if (createdRoomInfo) {
-      const { roomId, rawKeyBase64 } = createdRoomInfo;
+      const { roomId, rawKeyBase64, pinHash } = createdRoomInfo;
       setCreatedRoomInfo(null);
       // Update browser URL without full reload (using ?room= for 100% static hosting compatibility)
       window.history.pushState({}, '', `/?room=${encodeURIComponent(roomId)}#key=${rawKeyBase64}`);
       setActiveRoomId(roomId);
       setActiveKeyBase64(rawKeyBase64);
+      setActivePinHash(enteredPinHash || pinHash);
     }
   };
 
@@ -167,6 +170,7 @@ export default function App() {
           rawKeyBase64={createdRoomInfo.rawKeyBase64}
           expiresAt={createdRoomInfo.expiresAt}
           hasPin={createdRoomInfo.hasPin}
+          pinHash={createdRoomInfo.pinHash}
           onEnterRoom={handleEnterCreatedRoom}
           onClose={() => setCreatedRoomInfo(null)}
         />
