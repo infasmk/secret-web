@@ -27,25 +27,51 @@ export default function App() {
     expiresAt: number;
   } | null>(null);
 
-  // Initial Route Check (handles incoming shared links, e.g. /room/abc-123#key=...)
+  // Initial Route Check (handles incoming shared links, e.g. /room/abc-123#key=... or ?room=abc-123#key=...)
   useEffect(() => {
     const parseUrlRoute = () => {
       const pathname = window.location.pathname;
+      const search = window.location.search;
       const hash = window.location.hash;
 
-      if (pathname.includes('/room/')) {
+      let extractedRoomId: string | null = null;
+      let extractedKey: string | undefined;
+
+      // 1. Check Query parameter: ?room=ROOM_ID or ?r=ROOM_ID
+      const searchParams = new URLSearchParams(search);
+      if (searchParams.get('room')) {
+        extractedRoomId = searchParams.get('room');
+      } else if (searchParams.get('r')) {
+        extractedRoomId = searchParams.get('r');
+      }
+
+      // 2. Check Pathname: /room/ROOM_ID
+      if (!extractedRoomId && pathname.includes('/room/')) {
         const parts = pathname.split('/room/')[1];
-        const extractedRoomId = parts.split('/')[0].split('?')[0].trim();
-        let extractedKey: string | undefined;
+        extractedRoomId = parts.split('/')[0].split('?')[0].trim();
+      }
 
-        if (hash && hash.includes('key=')) {
-          extractedKey = hash.split('key=')[1]?.split('&')[0]?.trim();
+      // 3. Check Hash route: #/room/ROOM_ID or #room=ROOM_ID
+      if (!extractedRoomId && hash) {
+        if (hash.includes('/room/')) {
+          const parts = hash.split('/room/')[1];
+          extractedRoomId = parts.split('/')[0].split('?')[0].split('#')[0].trim();
+        } else if (hash.includes('room=')) {
+          const match = hash.match(/room=([a-zA-Z0-9_-]+)/);
+          if (match) extractedRoomId = match[1];
         }
+      }
 
-        if (extractedRoomId) {
-          setActiveRoomId(extractedRoomId);
-          setActiveKeyBase64(extractedKey);
-        }
+      // Extract E2E encryption key from Hash or Query
+      if (hash && hash.includes('key=')) {
+        extractedKey = hash.split('key=')[1]?.split('&')[0]?.trim();
+      } else if (searchParams.get('key')) {
+        extractedKey = searchParams.get('key') || undefined;
+      }
+
+      if (extractedRoomId) {
+        setActiveRoomId(extractedRoomId);
+        setActiveKeyBase64(extractedKey);
       } else {
         setActiveRoomId(null);
         setActiveKeyBase64(undefined);
@@ -54,7 +80,11 @@ export default function App() {
 
     parseUrlRoute();
     window.addEventListener('popstate', parseUrlRoute);
-    return () => window.removeEventListener('popstate', parseUrlRoute);
+    window.addEventListener('hashchange', parseUrlRoute);
+    return () => {
+      window.removeEventListener('popstate', parseUrlRoute);
+      window.removeEventListener('hashchange', parseUrlRoute);
+    };
   }, []);
 
   // Handle Room Created by Creator
@@ -74,8 +104,8 @@ export default function App() {
     if (createdRoomInfo) {
       const { roomId, rawKeyBase64 } = createdRoomInfo;
       setCreatedRoomInfo(null);
-      // Update browser URL without full reload
-      window.history.pushState({}, '', `/room/${roomId}#key=${rawKeyBase64}`);
+      // Update browser URL without full reload (using ?room= for 100% static hosting compatibility)
+      window.history.pushState({}, '', `/?room=${encodeURIComponent(roomId)}#key=${rawKeyBase64}`);
       setActiveRoomId(roomId);
       setActiveKeyBase64(rawKeyBase64);
     }
@@ -85,7 +115,7 @@ export default function App() {
   const handleJoinRoom = (roomId: string, rawKeyBase64?: string, pinHash?: string) => {
     setIsJoinOpen(false);
     const keyHash = rawKeyBase64 ? `#key=${rawKeyBase64}` : '';
-    window.history.pushState({}, '', `/room/${roomId}${keyHash}`);
+    window.history.pushState({}, '', `/?room=${encodeURIComponent(roomId)}${keyHash}`);
     setActiveRoomId(roomId);
     setActiveKeyBase64(rawKeyBase64);
     setActivePinHash(pinHash);
@@ -93,7 +123,7 @@ export default function App() {
 
   // Exit Room back to Landing Page
   const handleExitRoom = () => {
-    window.history.pushState({}, '', '/');
+    window.history.pushState({}, '', window.location.pathname === '/' ? '/' : window.location.pathname.split('?')[0]);
     setActiveRoomId(null);
     setActiveKeyBase64(undefined);
     setActivePinHash(undefined);

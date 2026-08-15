@@ -29,8 +29,8 @@ export const RoomShareModal: React.FC<RoomShareModalProps> = ({
   const [timeLeft, setTimeLeft] = useState('');
 
   const fullShareUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/room/${roomId}#key=${rawKeyBase64}`
-    : `/room/${roomId}#key=${rawKeyBase64}`;
+    ? `${window.location.origin}/?room=${encodeURIComponent(roomId)}#key=${rawKeyBase64}`
+    : `/?room=${encodeURIComponent(roomId)}#key=${rawKeyBase64}`;
 
   useEffect(() => {
     const update = () => {

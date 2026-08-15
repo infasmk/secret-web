@@ -86,7 +86,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   }, [expiresAt]);
 
   const handleCopyLink = () => {
-    const fullUrl = `${window.location.origin}/room/${roomId}#key=${rawKeyBase64}`;
+    const fullUrl = `${window.location.origin}/?room=${encodeURIComponent(roomId)}#key=${rawKeyBase64}`;
     navigator.clipboard.writeText(fullUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
