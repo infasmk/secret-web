@@ -6,7 +6,7 @@ import React, { useState } from 'react';
 import { Shield, Clock, Lock, FileUp, Eye, Sparkles, AlertCircle, ArrowRight, X } from 'lucide-react';
 import { generateRoomKey, exportKeyToBase64, hashPin, generateSalt } from '../lib/crypto';
 import { generateSecureRoomId } from '../lib/anonymousNames';
-import { parseResponseJson } from '../lib/api';
+import { parseResponseJson, safeFetch } from '../lib/api';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { ExpirationOption } from '../types';
@@ -73,27 +73,34 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
       }
 
       // 5. Create room on server (Zero-Knowledge: server receives NO key, only ciphertext/hashes)
-      const res = await fetch('/api/rooms/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: roomId,
-          title: title.trim() || 'Private Session',
-          expirationMs: expConfig.ms,
-          creatorId: 'anon_' + Math.random().toString(36).substring(2, 10),
-          security: {
-            hasPin: enablePin,
-            pinSalt,
-            pinHash,
-            allowFileUploads,
-            allowViewOnce,
-            maxFileSizeMb: 25,
-          },
-          encryptionVersion: 'AES-GCM-256',
-        }),
-      });
+      let createdData = { expiresAt: Date.now() + expConfig.ms, id: roomId };
+      try {
+        const res = await safeFetch('/api/rooms/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: roomId,
+            title: title.trim() || 'Private Session',
+            expirationMs: expConfig.ms,
+            creatorId: 'anon_' + Math.random().toString(36).substring(2, 10),
+            security: {
+              hasPin: enablePin,
+              pinSalt,
+              pinHash,
+              allowFileUploads,
+              allowViewOnce,
+              maxFileSizeMb: 25,
+            },
+            encryptionVersion: 'AES-GCM-256',
+          }),
+        });
 
-      const createdData = await parseResponseJson<{ expiresAt: number; id: string }>(res);
+        if (res.ok) {
+          createdData = await parseResponseJson<{ expiresAt: number; id: string }>(res);
+        }
+      } catch (srvErr) {
+        console.warn('Server registration note (Firestore active):', srvErr);
+      }
 
       // 6. Write room metadata to Firestore (Zero-Knowledge: no encryption key stored)
       const now = Date.now();

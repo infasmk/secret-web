@@ -16,10 +16,9 @@ export async function parseResponseJson<T = any>(res: Response): Promise<T> {
     } else {
       try {
         const text = await res.text();
-        // If it's HTML, don't dump HTML tags into the user error
         if (text.includes('<html') || text.includes('<!DOCTYPE') || text.includes('The page')) {
           errorMsg = res.status === 404
-            ? 'Endpoint not found or server is initializing. Please try again.'
+            ? 'Room or endpoint not found on server.'
             : `Server returned status ${res.status}. Please try again.`;
         } else if (text.trim().length > 0 && text.length < 200) {
           errorMsg = text.trim();
@@ -45,3 +44,25 @@ export async function parseResponseJson<T = any>(res: Response): Promise<T> {
     throw new Error('Invalid response from server.');
   }
 }
+
+/**
+ * Fetch with automatic short retry for server startup / transient states
+ */
+export async function safeFetch(url: string, options?: RequestInit, retries = 2, delayMs = 600): Promise<Response> {
+  try {
+    const res = await fetch(url, options);
+    // If server is currently booting (502 / 503 / 504), retry once
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && retries > 0) {
+      await new Promise(r => setTimeout(r, delayMs));
+      return safeFetch(url, options, retries - 1, delayMs * 1.5);
+    }
+    return res;
+  } catch (err: any) {
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, delayMs));
+      return safeFetch(url, options, retries - 1, delayMs * 1.5);
+    }
+    throw err;
+  }
+}
+

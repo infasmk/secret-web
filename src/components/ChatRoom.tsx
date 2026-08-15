@@ -18,9 +18,9 @@ import {
   bufferToBase64Url,
 } from '../lib/crypto';
 import { generateAnonymousIdentity } from '../lib/anonymousNames';
-import { parseResponseJson } from '../lib/api';
+import { parseResponseJson, safeFetch } from '../lib/api';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, doc, setDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { ChatMessage, RoomMember, RoomMetadata, WsServerMessage } from '../types';
 import { Shield, Lock, AlertCircle, ArrowLeft, RefreshCw, Trash2, Clock, Sparkles } from 'lucide-react';
 
@@ -102,26 +102,64 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     }
   }, [rawKeyBase64]);
 
-  // 3. Fetch Room Metadata from Server
+  // 3. Fetch Room Metadata from Server / Firestore
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
     setRoomError(null);
 
-    fetch(`/api/rooms/${encodeURIComponent(roomId)}`)
-      .then(res => parseResponseJson<RoomMetadata>(res))
-      .then(meta => {
-        if (isMounted) {
+    const loadMeta = async () => {
+      try {
+        const res = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}`);
+        if (res.ok) {
+          const meta = await parseResponseJson<RoomMetadata>(res);
+          if (isMounted) {
+            setRoomMeta(meta);
+            setIsLoading(false);
+            return;
+          }
+        }
+      } catch (_) {
+        // Fallback to Firestore
+      }
+
+      // Check Firestore directly for room metadata
+      try {
+        const docSnap = await getDoc(doc(db, 'rooms', roomId));
+        if (docSnap.exists() && isMounted) {
+          const d = docSnap.data();
+          const meta: RoomMetadata = {
+            id: roomId,
+            title: d.name || 'Private Session',
+            createdAt: d.createdAt || Date.now(),
+            expiresAt: d.expiresAt || (Date.now() + 86400000),
+            creatorId: d.createdBy || 'anon_creator',
+            status: d.destroyed ? 'destroyed' : (Date.now() >= (d.expiresAt || 0) ? 'expired' : 'active'),
+            security: {
+              hasPin: d.hasPin || false,
+              pinSalt: d.salt || '',
+              allowFileUploads: d.allowFiles !== false,
+              allowViewOnce: d.allowViewOnce !== false,
+              maxFileSizeMb: 25,
+            },
+            encryptionVersion: 'AES-GCM-256',
+            memberCount: 1,
+          };
           setRoomMeta(meta);
           setIsLoading(false);
+          return;
         }
-      })
-      .catch(err => {
-        if (isMounted) {
-          setRoomError(err.message);
-          setIsLoading(false);
-        }
-      });
+      } catch (fsErr) {
+        console.warn('Firestore fallback note:', fsErr);
+      }
+
+      if (isMounted) {
+        setRoomError('Room not found or has expired.');
+        setIsLoading(false);
+      }
+    };
+
+    loadMeta();
 
     return () => {
       isMounted = false;

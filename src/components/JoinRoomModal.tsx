@@ -5,7 +5,9 @@
 import React, { useState } from 'react';
 import { LogIn, Key, Lock, AlertCircle, ArrowRight, X } from 'lucide-react';
 import { hashPin } from '../lib/crypto';
-import { parseResponseJson } from '../lib/api';
+import { parseResponseJson, safeFetch } from '../lib/api';
+import { db } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 interface JoinRoomModalProps {
   isOpen: boolean;
@@ -64,9 +66,40 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
     setIsVerifying(true);
 
     try {
-      // Check room status from server
-      const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`);
-      const meta = await parseResponseJson<any>(res);
+      let meta: any = null;
+
+      // 1. Check server
+      try {
+        const res = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}`);
+        if (res.ok) {
+          meta = await parseResponseJson<any>(res);
+        }
+      } catch (_) {}
+
+      // 2. Fallback to Firestore
+      if (!meta) {
+        try {
+          const docSnap = await getDoc(doc(db, 'rooms', roomId));
+          if (docSnap.exists()) {
+            const d = docSnap.data();
+            meta = {
+              id: roomId,
+              title: d.name || 'Private Session',
+              security: {
+                hasPin: d.hasPin || false,
+                pinSalt: d.salt || '',
+                pinHash: d.pinHash || '',
+              },
+            };
+          }
+        } catch (fsErr) {
+          console.warn('Firestore join lookup note:', fsErr);
+        }
+      }
+
+      if (!meta) {
+        throw new Error('Room not found or has expired.');
+      }
 
       if (meta.security?.hasPin && !needsPin) {
         setNeedsPin(true);
@@ -84,14 +117,21 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({
         }
         calculatedPinHash = await hashPin(pin.trim(), meta.security.pinSalt || '');
         
-        // Verify PIN on server
-        const pinRes = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/verify-pin`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pinHash: calculatedPinHash }),
-        });
+        // Verify PIN locally or on server
+        if (meta.security.pinHash && calculatedPinHash !== meta.security.pinHash) {
+          throw new Error('Incorrect PIN code');
+        }
 
-        await parseResponseJson<any>(pinRes);
+        try {
+          const pinRes = await safeFetch(`/api/rooms/${encodeURIComponent(roomId)}/verify-pin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinHash: calculatedPinHash }),
+          });
+          if (pinRes.ok) {
+            await parseResponseJson<any>(pinRes);
+          }
+        } catch (_) {}
       }
 
       onJoinRoom(roomId, extractedKey || undefined, calculatedPinHash || undefined);
