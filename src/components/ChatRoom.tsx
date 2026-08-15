@@ -19,6 +19,8 @@ import {
 } from '../lib/crypto';
 import { generateAnonymousIdentity } from '../lib/anonymousNames';
 import { parseResponseJson } from '../lib/api';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, doc, setDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { ChatMessage, RoomMember, RoomMetadata, WsServerMessage } from '../types';
 import { Shield, Lock, AlertCircle, ArrowLeft, RefreshCw, Trash2, Clock, Sparkles } from 'lucide-react';
 
@@ -216,6 +218,66 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     };
   }, [roomId, roomMeta?.id, isDestroyed, cryptoKey]);
 
+  // 4b. Initialize Firestore Real-Time Message Listener
+  useEffect(() => {
+    if (!roomId || isDestroyed) return;
+
+    const messagesCollection = collection(db, 'rooms', roomId, 'messages');
+    const q = query(messagesCollection, orderBy('timestamp', 'asc'), limit(200));
+
+    const unsubscribe = onSnapshot(
+      q,
+      async snapshot => {
+        const remoteMsgs: ChatMessage[] = [];
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data();
+          let decryptedText: string | undefined = undefined;
+
+          if (cryptoKey && data.encryptedText && data.iv) {
+            try {
+              decryptedText = await decryptText({ iv: data.iv, ciphertext: data.encryptedText }, cryptoKey);
+            } catch {
+              decryptedText = '[Decryption Error]';
+            }
+          }
+
+          remoteMsgs.push({
+            id: data.id || docSnap.id,
+            roomId,
+            senderId: data.sender || 'anon',
+            senderName: data.senderAlias || 'Anonymous',
+            senderColor: data.senderColor || '#818cf8',
+            type: data.fileCipher ? 'file' : 'text',
+            encryptedContent: {
+              iv: data.iv,
+              ciphertext: data.encryptedText,
+            },
+            decryptedText,
+            createdAt: data.timestamp || Date.now(),
+            expiresAt: data.expiresAt || (Date.now() + 86400000),
+            isViewOnce: data.viewOnce || false,
+            isBurned: data.viewed || false,
+            status: 'delivered',
+          });
+        }
+
+        if (remoteMsgs.length > 0) {
+          setMessages(prev => {
+            const mergedMap = new Map<string, ChatMessage>();
+            prev.forEach(m => mergedMap.set(m.id, m));
+            remoteMsgs.forEach(m => mergedMap.set(m.id, m));
+            return Array.from(mergedMap.values()).sort((a, b) => a.createdAt - b.createdAt);
+          });
+        }
+      },
+      error => {
+        handleFirestoreError(error, OperationType.LIST, `rooms/${roomId}/messages`);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [roomId, isDestroyed, cryptoKey]);
+
   // 5. Decrypt text messages whenever cryptoKey updates
   useEffect(() => {
     if (!cryptoKey || messages.length === 0) return;
@@ -294,6 +356,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
     setMessages(prev => [...prev, localMsg]);
 
+    // Send via WebSocket
     socketRef.current?.send({
       type: 'message',
       roomId,
@@ -302,6 +365,26 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       avatarColor,
       payload: msgPayload,
     });
+
+    // Zero-Knowledge Store to Firestore
+    try {
+      await setDoc(doc(db, 'rooms', roomId, 'messages', msgPayload.id), {
+        id: msgPayload.id,
+        roomId,
+        sender: identity.id,
+        senderAlias: displayName,
+        senderColor: avatarColor,
+        senderAvatar: 'user',
+        encryptedText: encryptedContent.ciphertext,
+        iv: encryptedContent.iv,
+        viewOnce: isViewOnce,
+        viewed: false,
+        timestamp: Date.now(),
+        expiresAt: roomMeta?.expiresAt || Date.now() + 86400000,
+      });
+    } catch (fsErr) {
+      console.warn('Firestore write notice:', fsErr);
+    }
   };
 
   // Encrypt and Send Media / File

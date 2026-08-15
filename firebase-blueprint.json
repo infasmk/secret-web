@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "Encrypted ephemeral room metadata",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique secure room identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional display label of the room"
+        },
+        "expiresAt": {
+          "type": "number",
+          "description": "Timestamp in milliseconds when the room self-destructs"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp when room was created"
+        },
+        "burnOnRead": {
+          "type": "boolean",
+          "description": "Whether messages burn after read"
+        },
+        "allowFiles": {
+          "type": "boolean",
+          "description": "Whether encrypted file attachments are enabled"
+        },
+        "allowViewOnce": {
+          "type": "boolean",
+          "description": "Whether view-once media is enabled"
+        },
+        "hasPin": {
+          "type": "boolean",
+          "description": "Whether room is protected with a client-hashed PIN"
+        },
+        "pinHash": {
+          "type": "string",
+          "description": "PBKDF2/SHA-256 client hash of the optional PIN"
+        },
+        "salt": {
+          "type": "string",
+          "description": "Cryptographic salt for PIN verification"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Creator user identifier or anonymous session tag"
+        },
+        "destroyed": {
+          "type": "boolean",
+          "description": "Flag indicating if room was manually or automatically wiped"
+        },
+        "destructionReason": {
+          "type": "string",
+          "description": "Reason for destruction"
+        }
+      },
+      "required": ["id", "expiresAt", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Zero-knowledge encrypted chat payload",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique message identifier"
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Associated room ID"
+        },
+        "sender": {
+          "type": "string",
+          "description": "Sender session ID"
+        },
+        "senderAlias": {
+          "type": "string",
+          "description": "Sender anonymous display name"
+        },
+        "senderColor": {
+          "type": "string",
+          "description": "Sender badge accent color"
+        },
+        "senderAvatar": {
+          "type": "string",
+          "description": "Sender anonymous icon"
+        },
+        "encryptedText": {
+          "type": "string",
+          "description": "Base64 AES-GCM ciphertext of message payload"
+        },
+        "iv": {
+          "type": "string",
+          "description": "Base64 initialization vector"
+        },
+        "fileCipher": {
+          "type": "string",
+          "description": "Optional encrypted attachment metadata/payload"
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Encrypted or obfuscated file name"
+        },
+        "fileSize": {
+          "type": "number",
+          "description": "File size in bytes"
+        },
+        "fileType": {
+          "type": "string",
+          "description": "MIME type"
+        },
+        "viewOnce": {
+          "type": "boolean",
+          "description": "Whether message is view-once media"
+        },
+        "viewed": {
+          "type": "boolean",
+          "description": "Whether media has been burned/viewed"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Message creation timestamp"
+        },
+        "expiresAt": {
+          "type": "number",
+          "description": "Expiration timestamp"
+        }
+      },
+      "required": ["id", "roomId", "sender", "encryptedText", "iv", "timestamp"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "Ephemeral peer presence in room",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Peer session ID"
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Room ID"
+        },
+        "alias": {
+          "type": "string",
+          "description": "Display name"
+        },
+        "color": {
+          "type": "string",
+          "description": "Color accent"
+        },
+        "avatar": {
+          "type": "string",
+          "description": "Avatar icon name"
+        },
+        "joinedAt": {
+          "type": "number",
+          "description": "Join timestamp"
+        },
+        "lastSeen": {
+          "type": "number",
+          "description": "Heartbeat timestamp"
+        }
+      },
+      "required": ["id", "roomId", "alias", "joinedAt", "lastSeen"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Collection of active and expiring encrypted rooms"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Zero-knowledge encrypted messages within a room"
+    },
+    "/rooms/{roomId}/members/{memberId}": {
+      "schema": "Member",
+      "description": "Presence documents for active members in a room"
+    }
+  }
+}

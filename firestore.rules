@@ -1,61 +1,130 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
+    // Global default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
     // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isNotExpired(expiresAt) {
-      return request.time < expiresAt;
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Rooms collection
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidRoom(data) {
+      return data.id is string && isValidId(data.id)
+        && data.expiresAt is number && data.expiresAt > 0
+        && data.createdAt is number && data.createdAt > 0
+        && (!('name' in data) || (data.name is string && data.name.size() <= 100))
+        && (!('burnOnRead' in data) || data.burnOnRead is bool)
+        && (!('allowFiles' in data) || data.allowFiles is bool)
+        && (!('allowViewOnce' in data) || data.allowViewOnce is bool)
+        && (!('hasPin' in data) || data.hasPin is bool)
+        && (!('pinHash' in data) || (data.pinHash is string && data.pinHash.size() <= 256))
+        && (!('salt' in data) || (data.salt is string && data.salt.size() <= 128))
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && (!('destroyed' in data) || data.destroyed is bool)
+        && (!('destructionReason' in data) || (data.destructionReason is string && data.destructionReason.size() <= 256));
+    }
+
+    function isValidMessage(data, roomId) {
+      return data.id is string && isValidId(data.id)
+        && data.roomId is string && data.roomId == roomId
+        && data.sender is string && data.sender.size() <= 128
+        && data.encryptedText is string && data.encryptedText.size() <= 500000
+        && data.iv is string && data.iv.size() <= 64
+        && data.timestamp is number && data.timestamp > 0
+        && (!('senderAlias' in data) || (data.senderAlias is string && data.senderAlias.size() <= 64))
+        && (!('senderColor' in data) || (data.senderColor is string && data.senderColor.size() <= 32))
+        && (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 32))
+        && (!('fileCipher' in data) || (data.fileCipher is string && data.fileCipher.size() <= 500000))
+        && (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 256))
+        && (!('fileSize' in data) || data.fileSize is number)
+        && (!('fileType' in data) || (data.fileType is string && data.fileType.size() <= 64))
+        && (!('viewOnce' in data) || data.viewOnce is bool)
+        && (!('viewed' in data) || data.viewed is bool)
+        && (!('expiresAt' in data) || data.expiresAt is number);
+    }
+
+    function isValidMember(data, roomId) {
+      return data.id is string && isValidId(data.id)
+        && data.roomId is string && data.roomId == roomId
+        && data.alias is string && data.alias.size() <= 64
+        && data.joinedAt is number && data.joinedAt > 0
+        && data.lastSeen is number && data.lastSeen > 0
+        && (!('color' in data) || (data.color is string && data.color.size() <= 32))
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 32));
+    }
+
+    // ROOMS COLLECTION
     match /rooms/{roomId} {
-      // Allow reading metadata if room is not expired
-      allow read: if isNotExpired(resource.data.expiresAt);
+      allow get: if isValidId(roomId);
+      allow list: if false; // Disallow scraping entire rooms list
       
-      // Allow creation with valid fields, future expiration, and sane limits
-      allow create: if isAuthenticated()
-        && request.resource.data.keys().hasAll(['id', 'createdAt', 'expiresAt', 'status'])
-        && request.resource.data.expiresAt > request.time
-        && request.resource.data.expiresAt <= request.time + duration.value(7, 'd')
-        && request.resource.data.status == 'active';
-        
-      // Only creator or participant can mark room destroyed or update status
-      allow update: if isAuthenticated()
-        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'destructionReason']))
-        && (request.resource.data.status in ['active', 'expired', 'destroyed']);
+      allow create: if isValidId(roomId)
+        && isValidRoom(incoming())
+        && incoming().id == roomId;
 
-      // Hard deletion reserved for server-side Cloud Function sweepers
-      allow delete: if false;
+      allow update: if isValidId(roomId)
+        && isValidRoom(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Allow self-destruction or updating status
+          incoming().diff(existing()).affectedKeys().hasOnly(['destroyed', 'destructionReason'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['name'])
+        );
 
-      // Ephemeral Room Members subcollection
-      match /members/{memberId} {
-        allow read: if isAuthenticated();
-        allow create, update: if isAuthenticated()
-          && request.resource.data.keys().hasAll(['displayName', 'joinedAt', 'lastSeenAt']);
-        allow delete: if isAuthenticated() && request.auth.uid == memberId;
+      allow delete: if isValidId(roomId);
+
+      // MESSAGES SUBCOLLECTION
+      match /messages/{messageId} {
+        allow get: if isValidId(roomId) && isValidId(messageId);
+        allow list: if isValidId(roomId);
+
+        allow create: if isValidId(roomId)
+          && isValidId(messageId)
+          && isValidMessage(incoming(), roomId)
+          && incoming().id == messageId;
+
+        allow update: if isValidId(roomId)
+          && isValidId(messageId)
+          && isValidMessage(incoming(), roomId)
+          && incoming().id == existing().id
+          && incoming().roomId == existing().roomId
+          && incoming().sender == existing().sender
+          && incoming().timestamp == existing().timestamp
+          && incoming().diff(existing()).affectedKeys().hasOnly(['viewed']);
+
+        allow delete: if isValidId(roomId) && isValidId(messageId);
       }
 
-      // Ephemeral Messages subcollection (ciphertext only)
-      match /messages/{messageId} {
-        // Can only read messages if room is not expired
-        allow read: if isAuthenticated()
-          && isNotExpired(get(/databases/$(database)/documents/rooms/$(roomId)).data.expiresAt);
+      // MEMBERS SUBCOLLECTION
+      match /members/{memberId} {
+        allow get, list: if isValidId(roomId);
+        
+        allow create: if isValidId(roomId)
+          && isValidId(memberId)
+          && isValidMember(incoming(), roomId)
+          && incoming().id == memberId;
 
-        // Can only write encrypted ciphertext with valid payload structure
-        allow create: if isAuthenticated()
-          && request.resource.data.keys().hasAll(['senderId', 'type', 'encryptedContent', 'createdAt'])
-          && request.resource.data.encryptedContent.keys().hasAll(['iv', 'ciphertext'])
-          && request.resource.data.encryptedContent.ciphertext.size() < 100000;
+        allow update: if isValidId(roomId)
+          && isValidId(memberId)
+          && isValidMember(incoming(), roomId)
+          && incoming().id == existing().id
+          && incoming().roomId == existing().roomId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['lastSeen', 'alias', 'color', 'avatar']);
 
-        // Can only update to mark view-once media burned
-        allow update: if isAuthenticated()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBurned', 'viewedBy', 'burnedAt']);
-
-        allow delete: if false;
+        allow delete: if isValidId(roomId) && isValidId(memberId);
       }
     }
   }

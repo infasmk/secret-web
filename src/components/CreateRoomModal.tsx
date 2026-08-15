@@ -7,6 +7,8 @@ import { Shield, Clock, Lock, FileUp, Eye, Sparkles, AlertCircle, ArrowRight, X 
 import { generateRoomKey, exportKeyToBase64, hashPin, generateSalt } from '../lib/crypto';
 import { generateSecureRoomId } from '../lib/anonymousNames';
 import { parseResponseJson } from '../lib/api';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { ExpirationOption } from '../types';
 
 interface CreateRoomModalProps {
@@ -92,6 +94,29 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
       });
 
       const createdData = await parseResponseJson<{ expiresAt: number; id: string }>(res);
+
+      // 6. Write room metadata to Firestore (Zero-Knowledge: no encryption key stored)
+      const now = Date.now();
+      try {
+        await setDoc(doc(db, 'rooms', roomId), {
+          id: roomId,
+          name: title.trim() || 'Private Session',
+          expiresAt: createdData.expiresAt || (now + expConfig.ms),
+          createdAt: now,
+          burnOnRead: false,
+          allowFiles: allowFileUploads,
+          allowViewOnce: allowViewOnce,
+          hasPin: enablePin,
+          pinHash: pinHash || '',
+          salt: pinSalt || '',
+          createdBy: 'anon_' + Math.random().toString(36).substring(2, 10),
+          destroyed: false,
+          destructionReason: '',
+        });
+      } catch (fsErr) {
+        console.warn('Firestore room sync note:', fsErr);
+      }
+
       onRoomCreated(roomId, rawKeyBase64, enablePin, createdData.expiresAt);
     } catch (err: any) {
       console.error('Room creation error:', err);
